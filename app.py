@@ -1,9 +1,9 @@
 """
-app_v4.py  (a.k.a. app.py)
+app.py
 ------
-Streamlit UI for a generic YouTube livestream thumbnail generator -- not
-tied to any specific channel, organization, or church. Anyone can fill in
-their own branding and generate a thumbnail.
+Streamlit UI for a generic livestream thumbnail generator -- not tied to
+any specific channel, organization, or church. Anyone can fill in their
+own branding and generate a 1280x720 thumbnail in seconds.
 
 Run with:   streamlit run app.py
 
@@ -11,22 +11,24 @@ All image work lives in thumbnail_generator.py; this file only collects
 user input, persists uploaded assets to disk, and renders a live preview
 with a download button.
 
-The "Schedule on YouTube" section at the bottom is an OPTIONAL extra: it
-creates a real scheduled live broadcast on YOUR OWN YouTube channel via the
-official Data API, but only after YOU set up your own Google Cloud OAuth
-credentials and sign in with your own Google account (see README.md). It
-is used entirely at your own risk and has nothing to do with the basic
-thumbnail-generation feature above it.
+Multi-user note: everything a visitor uploads (logo, anniversary badge,
+their own background photos, their own fonts) is saved under a folder
+unique to THEIR browser session, never into the shared assets/backgrounds/
+fonts/ folders bundled with the app. That keeps one visitor's uploads from
+ever appearing for someone else if this app is deployed as a single
+shared instance for multiple people to use (see "Multiple users" in
+README.md).
 """
 
-import datetime as dt
 import io
 import os
+import shutil
+import tempfile
 import time
+import uuid
 
 import streamlit as st
 
-import youtube_scheduler as yts
 from thumbnail_generator import (
     ASSETS_DIR,
     BACKGROUNDS_DIR,
@@ -41,22 +43,56 @@ from thumbnail_generator import (
     list_fonts,
 )
 
-YT_CATEGORIES = {
-    "People & Blogs": "22",
-    "Nonprofits & Activism": "29",
-    "Education": "27",
-    "Entertainment": "24",
-}
-YT_TIMEZONES = ["Asia/Kolkata", "UTC", "America/New_York", "America/Los_Angeles", "Europe/London"]
-
 st.set_page_config(page_title="Livestream Thumbnail Generator", page_icon="🎬", layout="wide")
 
 os.makedirs(ASSETS_DIR, exist_ok=True)
 os.makedirs(BACKGROUNDS_DIR, exist_ok=True)
 os.makedirs(FONTS_DIR, exist_ok=True)
 
-LOGO_PATH = os.path.join(ASSETS_DIR, "logo.png")
-ANNIVERSARY_BADGE_PATH = os.path.join(ASSETS_DIR, "anniversary_badge.png")
+# --------------------------------------------------------------------------
+# Per-session, private storage -- see the multi-user note in the module
+# docstring above. Each browser session gets its own folder under the
+# system temp dir; nothing uploaded there is ever shown to a different
+# session.
+# --------------------------------------------------------------------------
+if "session_id" not in st.session_state:
+    st.session_state.session_id = uuid.uuid4().hex[:16]
+
+SESSION_ROOT = os.path.join(tempfile.gettempdir(), "thumbnail_app_sessions")
+SESSION_DIR = os.path.join(SESSION_ROOT, st.session_state.session_id)
+SESSION_BG_DIR = os.path.join(SESSION_DIR, "backgrounds")
+SESSION_FONTS_DIR = os.path.join(SESSION_DIR, "fonts")
+os.makedirs(SESSION_BG_DIR, exist_ok=True)
+os.makedirs(SESSION_FONTS_DIR, exist_ok=True)
+os.utime(SESSION_DIR, None)  # mark this session folder as recently active
+
+DEFAULT_LOGO_PATH = os.path.join(ASSETS_DIR, "logo.png")  # shared, read-only placeholder
+LOGO_PATH = os.path.join(SESSION_DIR, "logo.png")  # this visitor's own upload, if any
+ANNIVERSARY_BADGE_PATH = os.path.join(SESSION_DIR, "anniversary_badge.png")
+
+
+def _cleanup_old_sessions(max_age_hours: float = 24) -> None:
+    """Best-effort removal of session folders left behind by visitors who
+    closed their tab a while ago, so disk usage stays bounded on a
+    long-running shared deployment. Never raises -- a failed cleanup just
+    leaves the old folder for next time."""
+    try:
+        cutoff = time.time() - max_age_hours * 3600
+        for name in os.listdir(SESSION_ROOT):
+            path = os.path.join(SESSION_ROOT, name)
+            if (
+                name != st.session_state.session_id
+                and os.path.isdir(path)
+                and os.path.getmtime(path) < cutoff
+            ):
+                shutil.rmtree(path, ignore_errors=True)
+    except Exception:
+        pass
+
+
+if "_did_cleanup" not in st.session_state:
+    _cleanup_old_sessions()
+    st.session_state._did_cleanup = True
 
 if "last_image" not in st.session_state:
     st.session_state.last_image = None
@@ -64,10 +100,13 @@ if "last_bg" not in st.session_state:
     st.session_state.last_bg = None
 if "bg_choice_select" not in st.session_state:
     st.session_state.bg_choice_select = "Random"
-# Bumping this forces a brand-new (empty) badge file_uploader widget, which is
-# the only reliable way to make "Remove badge" stick -- file_uploader otherwise
-# keeps returning the same uploaded file on every rerun, even after the file
-# on disk has been deleted, and would just re-save it right back.
+# Bumping these forces a brand-new (empty) file_uploader widget, which is
+# the only reliable way to make "Remove logo" / "Remove badge" stick --
+# file_uploader otherwise keeps returning the same uploaded file on every
+# rerun, even after the file on disk has been deleted, and would just
+# re-save it right back.
+if "logo_uploader_version" not in st.session_state:
+    st.session_state.logo_uploader_version = 0
 if "badge_uploader_version" not in st.session_state:
     st.session_state.badge_uploader_version = 0
 
@@ -89,6 +128,15 @@ def _font_index(paths, target):
         return 0
 
 
+def _list_images(directory: str):
+    exts = (".jpg", ".jpeg", ".png", ".webp")
+    if not os.path.isdir(directory):
+        return []
+    return sorted(
+        os.path.join(directory, f) for f in os.listdir(directory) if f.lower().endswith(exts)
+    )
+
+
 st.title("🎬 Livestream Thumbnail Generator")
 st.caption(
     "Works for any channel, organization, or event — fill in your own branding "
@@ -100,38 +148,68 @@ st.caption(
 # --------------------------------------------------------------------------
 with st.sidebar:
     st.header("Branding assets")
+    st.caption("Anything you upload here is private to your browser session — other visitors never see it.")
 
-    logo_file = st.file_uploader("Logo (PNG, transparent background ideal)", type=["png", "jpg", "jpeg"])
+    logo_file = st.file_uploader(
+        "Logo (PNG, transparent background ideal)",
+        type=["png", "jpg", "jpeg"],
+        key=f"logo_upload_{st.session_state.logo_uploader_version}",
+    )
     if logo_file is not None:
         with open(LOGO_PATH, "wb") as f:
             f.write(logo_file.getbuffer())
-        st.success("Logo saved — it will be used from now on.")
-    if os.path.isfile(LOGO_PATH):
-        st.image(_read_bytes(LOGO_PATH), caption="Current logo", width=90)
+        st.success("Logo saved for this session — it will be used from now on.")
+
+    has_uploaded_logo = os.path.isfile(LOGO_PATH)
+    if has_uploaded_logo:
+        logo_col1, logo_col2 = st.columns([3, 1])
+        with logo_col1:
+            st.image(_read_bytes(LOGO_PATH), caption="Your logo", width=90)
+        with logo_col2:
+            st.write("")
+            st.write("")
+            if st.button("Remove logo"):
+                try:
+                    os.remove(LOGO_PATH)
+                except OSError as e:
+                    st.warning(f"Couldn't remove the logo file (it may be open elsewhere): {e}")
+                else:
+                    # Force a fresh, empty uploader widget so it doesn't just
+                    # re-save the same file back on the next rerun.
+                    st.session_state.logo_uploader_version += 1
+                    st.rerun()
+    elif os.path.isfile(DEFAULT_LOGO_PATH):
+        st.image(_read_bytes(DEFAULT_LOGO_PATH), caption="Placeholder logo (upload your own above)", width=90)
 
     st.divider()
     st.subheader("Backgrounds")
+    st.caption("Stock backgrounds below are shared by everyone. Anything you upload here is private to you.")
     bg_files = st.file_uploader(
-        "Add background photos (you can select several)",
+        "Add your own background photos (you can select several)",
         type=["jpg", "jpeg", "png"],
         accept_multiple_files=True,
     )
     if bg_files:
         last_name = None
         for bf in bg_files:
-            dest = os.path.join(BACKGROUNDS_DIR, bf.name)
+            dest = os.path.join(SESSION_BG_DIR, bf.name)
             with open(dest, "wb") as f:
                 f.write(bf.getbuffer())
             last_name = bf.name
-        st.success(f"Saved {len(bg_files)} background image(s).")
+        st.success(f"Saved {len(bg_files)} background image(s) for this session.")
         # Auto-select the photo just uploaded, same "use it automatically"
         # behavior as the logo and the anniversary badge, instead of silently
         # leaving the dropdown on "Random" and never using the new photo.
         if last_name:
-            st.session_state.bg_choice_select = last_name
+            st.session_state.bg_choice_select = f"⭐ {last_name}"
 
-    available_bgs = list_backgrounds()
-    bg_options = ["Random"] + [os.path.basename(p) for p in available_bgs]
+    stock_bgs = list_backgrounds()  # shared stock images bundled with the app
+    session_bgs = _list_images(SESSION_BG_DIR)  # this visitor's own uploads only
+
+    bg_lookup = {"Random": None}
+    bg_lookup.update({f"⭐ {os.path.basename(p)}": p for p in session_bgs})
+    bg_lookup.update({os.path.basename(p): p for p in stock_bgs})
+    bg_options = list(bg_lookup.keys())
     if st.session_state.bg_choice_select not in bg_options:
         st.session_state.bg_choice_select = "Random"
 
@@ -139,28 +217,35 @@ with st.sidebar:
         "Background for next generation",
         options=bg_options,
         key="bg_choice_select",
+        help="⭐ marks your own uploaded photos (only visible to you).",
     )
-    if bg_choice != "Random":
-        bg_preview_path = os.path.join(BACKGROUNDS_DIR, bg_choice)
-        if os.path.isfile(bg_preview_path):
-            st.image(_read_bytes(bg_preview_path), caption=f"Background: {bg_choice}", width=140)
+    bg_preview_path = bg_lookup[bg_choice]
+    if bg_preview_path:
+        st.image(_read_bytes(bg_preview_path), caption=f"Background: {bg_choice}", width=140)
 
     st.divider()
     st.subheader("Fonts")
+    st.caption("Built-in fonts are shared. Fonts you upload here are private to you.")
     font_uploads = st.file_uploader(
         "Add new font files (.ttf / .otf)",
         type=["ttf", "otf"],
         accept_multiple_files=True,
-        help="Uploaded fonts are saved into the fonts/ folder and show up as "
-             "extra choices in the dropdowns below — for this and future sessions.",
+        help="Uploaded fonts are private to this session and show up as extra "
+             "choices in the dropdowns below for the rest of this session.",
     )
     if font_uploads:
         for ff in font_uploads:
-            with open(os.path.join(FONTS_DIR, ff.name), "wb") as f:
+            with open(os.path.join(SESSION_FONTS_DIR, ff.name), "wb") as f:
                 f.write(ff.getbuffer())
-        st.success(f"Added {len(font_uploads)} font file(s).")
+        st.success(f"Added {len(font_uploads)} font file(s) for this session.")
 
-    available_fonts = list_fonts()
+    builtin_fonts = list_fonts()  # shared, bundled fonts only
+    session_fonts = sorted(
+        os.path.join(SESSION_FONTS_DIR, f)
+        for f in os.listdir(SESSION_FONTS_DIR)
+        if f.lower().endswith((".ttf", ".otf"))
+    )
+    available_fonts = builtin_fonts + session_fonts
     with st.expander("Choose fonts for each text role", expanded=False):
         font_title = st.selectbox(
             "Title font (organization name)",
@@ -197,8 +282,7 @@ with col_form:
     title = st.text_input(
         "Main title",
         value="YOUR ORGANIZATION NAME",
-        help="Your organization or channel name. Also used to auto-fill the "
-             "YouTube title/description below if you use that optional feature.",
+        help="Your organization or channel name.",
     )
     presented_by = st.text_input("Small line under title", value="Presents")
 
@@ -214,7 +298,7 @@ with col_form:
     show_anniversary = st.checkbox("Show anniversary badge", value=True)
 
     badge_file = st.file_uploader(
-        "Upload a ready-made badge graphic (optional)",
+        "Upload a ready-made badge graphic (optional, private to you)",
         type=["png", "jpg", "jpeg"],
         disabled=not show_anniversary,
         key=f"badge_upload_{st.session_state.badge_uploader_version}",
@@ -225,7 +309,7 @@ with col_form:
     if badge_file is not None:
         with open(ANNIVERSARY_BADGE_PATH, "wb") as f:
             f.write(badge_file.getbuffer())
-        st.success("Badge image saved — it will be used automatically.")
+        st.success("Badge image saved for this session — it will be used automatically.")
 
     has_uploaded_badge = os.path.isfile(ANNIVERSARY_BADGE_PATH)
     if show_anniversary and has_uploaded_badge:
@@ -274,13 +358,13 @@ with col_form:
 # Build config + generate
 # --------------------------------------------------------------------------
 if generate_clicked:
-    if bg_choice == "Random":
-        background_path = None  # let the generator pick randomly, avoiding repeat of last pick
-    else:
-        background_path = os.path.join(BACKGROUNDS_DIR, bg_choice)
+    background_path = bg_lookup.get(bg_choice)  # None => pick randomly from the stock library
 
     anniversary_badge_path = (
         ANNIVERSARY_BADGE_PATH if (show_anniversary and os.path.isfile(ANNIVERSARY_BADGE_PATH)) else None
+    )
+    logo_path = LOGO_PATH if os.path.isfile(LOGO_PATH) else (
+        DEFAULT_LOGO_PATH if os.path.isfile(DEFAULT_LOGO_PATH) else None
     )
 
     cfg = ThumbnailConfig(
@@ -299,6 +383,7 @@ if generate_clicked:
         show_live_badge=show_live_badge,
         show_subscribe_bar=show_subscribe_bar,
         youtube_handle=youtube_handle,
+        logo_path=logo_path,
         background_path=background_path,
         font_title=font_title,
         font_hero=font_hero,
@@ -340,109 +425,7 @@ st.caption(
     "Tip: drop your own photos into the sidebar uploader for variety — the one "
     "you just uploaded is auto-selected as the background. Upload your real "
     "logo or a ready-made anniversary badge once and each is reused "
-    "automatically from then on. Upload new font files in the sidebar to unlock "
-    "extra styles in the font dropdowns."
+    "automatically for the rest of your session — none of it is visible to "
+    "other visitors. Upload new font files in the sidebar to unlock extra "
+    "styles in the font dropdowns, also private to you."
 )
-
-# --------------------------------------------------------------------------
-# Schedule on YouTube
-# --------------------------------------------------------------------------
-st.divider()
-st.header("📅 Schedule on YouTube")
-st.warning(
-    "**Optional, advanced feature — use at your own risk.** This creates a "
-    "REAL scheduled broadcast on **your own** YouTube channel via the official "
-    "YouTube Data API. It only works after *you* set up your own free Google "
-    "Cloud project and OAuth credentials and sign in with your own Google "
-    "account (see **Schedule on YouTube setup** in README.md) — nothing here "
-    "is tied to, or shared with, anyone else's account. You're responsible "
-    "for whatever gets scheduled on your channel. Feel free to skip this "
-    "section entirely if you only need the thumbnail above."
-)
-st.caption(
-    "Uses the thumbnail generated above. Two Studio-only settings (the live "
-    "chat panel, the Reactions toggle) aren't exposed by Google's API, so "
-    "they aren't touched here; YouTube carries over whatever you last set "
-    "for those, so check them once in Studio if you ever want to change them."
-)
-
-if not yts.is_configured():
-    st.info(
-        "Not connected yet. Follow the **Schedule on YouTube setup** steps in "
-        "README.md (create your own free Google Cloud OAuth credentials, "
-        "~5 minutes), then place the downloaded `client_secret.json` next to "
-        "`app.py`."
-    )
-else:
-    yt_d1, yt_d2, yt_d3 = st.columns(3)
-    with yt_d1:
-        yt_date = st.date_input("Live date", value=dt.date.today(), key="yt_date")
-    with yt_d2:
-        yt_time = st.time_input("Start time", value=dt.time(9, 30), key="yt_time")
-    with yt_d3:
-        yt_tz = st.selectbox("Timezone", options=YT_TIMEZONES, index=0, key="yt_tz")
-
-    auto_title = yts.default_title(hero_line, script_line, yt_date, title)
-    yt_title = st.text_input("YouTube title", value=auto_title, key="yt_title")
-    yt_description = st.text_area(
-        "Description",
-        value=yts.default_description(yt_title, time_text, title),
-        height=110,
-        key="yt_description",
-    )
-
-    yt_c1, yt_c2, yt_c3 = st.columns(3)
-    with yt_c1:
-        yt_visibility = st.radio("Visibility", ["Public", "Unlisted", "Private"], key="yt_visibility")
-    with yt_c2:
-        yt_category_label = st.selectbox("Category", options=list(YT_CATEGORIES.keys()), key="yt_category")
-    with yt_c3:
-        yt_made_for_kids = st.checkbox("Made for kids", value=False, key="yt_made_for_kids")
-
-    yt_playlist = st.text_input(
-        "Add to playlist (created automatically if it doesn't exist)",
-        value="Live Streams",
-        key="yt_playlist",
-    )
-    st.caption("How you'll go live: streaming software (OBS, etc.) over RTMP — the stream key appears below once scheduled.")
-
-    schedule_clicked = st.button("📡 Schedule Live Stream on YouTube", use_container_width=True)
-
-    if schedule_clicked:
-        if st.session_state.last_image is None:
-            st.warning(
-                "Click **Generate Thumbnail** above first — the scheduled stream "
-                "uses that image as its YouTube thumbnail."
-            )
-        else:
-            thumb_path = os.path.join(ASSETS_DIR, "_last_scheduled_thumbnail.png")
-            st.session_state.last_image.convert("RGB").save(thumb_path, format="PNG")
-            try:
-                with st.spinner("Connecting to YouTube (a browser tab may open the first time)..."):
-                    creds = yts.get_credentials()
-                    youtube = yts.build_youtube_service(creds)
-                with st.spinner("Creating your scheduled stream..."):
-                    start_utc = yts.local_to_utc(yt_date, yt_time, yt_tz)
-                    cfg = yts.ScheduleConfig(
-                        title=yt_title,
-                        description=yt_description,
-                        scheduled_start_utc=start_utc,
-                        thumbnail_path=thumb_path,
-                        privacy_status=yt_visibility.lower(),
-                        made_for_kids=yt_made_for_kids,
-                        playlist_name=yt_playlist.strip() or None,
-                        category_id=YT_CATEGORIES[yt_category_label],
-                    )
-                    result = yts.create_scheduled_broadcast(youtube, cfg)
-            except yts.NotConfiguredError as e:
-                st.error(str(e))
-            except Exception as e:
-                st.error(f"Couldn't schedule the stream: {e}")
-            else:
-                st.success("Scheduled! Check the live chat / Reactions toggles once in Studio if you want to change them.")
-                st.markdown(f"**Watch page:** {result.watch_url}")
-                st.markdown(f"**Studio (edit / go live):** {result.studio_url}")
-                st.markdown(f"**Stream key** (paste into OBS/streaming software): `{result.stream_key}`")
-                st.markdown(f"**Server URL:** `{result.ingestion_address}`")
-                if result.playlist_name:
-                    st.caption(f'Added to playlist "{result.playlist_name}".')
