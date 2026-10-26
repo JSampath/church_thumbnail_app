@@ -138,3 +138,14 @@ directory) — there's nothing to manage by hand.
   users" above); the bundled stock assets live in `assets/`,
   `backgrounds/`, `fonts/`. Nothing is uploaded anywhere or shared with
   any third party — everything stays on the machine running the app.
+
+## License and terms of use
+
+- The code is free under the **MIT License** (`LICENSE`): use, change and
+  share it freely. It is provided **as is, without warranty**, and the author
+  is not liable for any claim or damages arising from its use.
+- The bundled fonts keep their own licenses (SIL Open Font License and the
+  DejaVu license) — see `fonts/LICENSES.txt`.
+- **Terms of use** (`TERMS.md`): you are responsible for the content you put in
+  a thumbnail and for how you use it. SJ Tech Solutions is not responsible for
+  content made with this app.

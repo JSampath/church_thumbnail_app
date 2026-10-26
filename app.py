@@ -552,8 +552,22 @@ with st.sidebar:
             "2. **Change the words** in the *Text* tab and set the **date & time**.\n"
             "3. Try **🎲 Shuffle** or choose a photo in the *Background* tab.\n"
             "4. Press **Download**. Upload it in YouTube Studio → your live stream → *Thumbnail*.\n\n"
-            "Nothing you upload leaves this computer."
+            "What you upload is kept only for your own session and is deleted after about a day."
         )
+    with st.expander("Terms of use", icon=":material/gavel:"):
+        st.markdown(
+            "- This app is **free and provided as is**, without any warranty.\n"
+            "- **You are responsible** for the logos, photos, names and words you use, and for how you "
+            "use the thumbnails. Only use material you own or have permission to use, and don't use the "
+            "app to imitate another person, church or organization.\n"
+            "- Thumbnails must follow **YouTube's Community Guidelines** and the law where you live.\n"
+            "- SJ Tech Solutions is **not responsible** for content made with this app or for any loss "
+            "arising from its use.\n\n"
+            "[Full terms](https://github.com/JSampath/church_thumbnail_app/blob/main/TERMS.md) · "
+            "[MIT License](https://github.com/JSampath/church_thumbnail_app/blob/main/LICENSE) · "
+            "[Font licenses](https://github.com/JSampath/church_thumbnail_app/blob/main/fonts/LICENSES.txt)"
+        )
+    st.caption("By using this app you agree to the terms of use. © 2026 SJ Tech Solutions")
 
 # --------------------------------------------------------------------------
 # Header + templates
