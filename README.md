@@ -6,7 +6,18 @@ a badge (e.g. an anniversary shield), a LIVE badge, and a Subscribe bar.
 It's generic — not tied to any specific channel, organization, or church —
 just fill in your own branding and download.
 
-## Setup
+## Quick start (no typing)
+
+* **Windows:** double-click **`Start Thumbnail Generator.bat`**.
+* **macOS / Linux:** run `./start.sh`.
+
+The first time, it sets itself up (about a minute, needs internet), then the
+app opens in your browser. You need Python 3.10 or newer from
+[python.org](https://www.python.org/downloads/) — on Windows tick
+*"Add python.exe to PATH"* while installing. Keep the black window open
+while you use the app; close it when you're done.
+
+## Setup (by hand)
 
 **macOS / Linux:**
 
@@ -53,35 +64,42 @@ This opens the app in your browser (usually `http://localhost:8501`).
 
 ## Using it
 
-1. **Sidebar** — upload your own logo (PNG with transparent background
-   works best) and any photos you want in the background rotation. Both
-   stay private to your browser session for as long as it's open (see
-   "Multiple users" below). Click "Remove logo" to go back to the
-   placeholder.
-2. **Form** — edit the title (your organization or channel name),
-   occasion text, date/time, badge fields, and YouTube handle. Toggle
-   the badge, LIVE badge, and Subscribe bar on/off as needed.
-   - For the badge, you can either let the app generate one from the
-     year/number/caption fields, or upload your own ready-made badge
-     graphic (e.g. a designed "52 Years" shield) in the form. Just like
-     the logo, an uploaded badge is used automatically — no extra toggle
-     needed — and is scaled to fit the same spot. Click "Remove badge"
-     to go back to the auto-generated version.
-   - Pick a font for the title, hero word, script lines, and body text
-     from the sidebar's "Fonts" section, or upload your own `.ttf`/
-     `.otf` files to add new choices.
-3. Click **Generate Thumbnail**. A photo you just uploaded is
-   auto-selected in the background dropdown (with a small preview) so
-   it's clear it'll actually be used — switch back to "Random" for a
-   different photo each time, or pin any other one.
-4. Pick PNG or JPEG (with a quality slider) and click **Download**.
+The preview on the right redraws as you type — there's no Generate button.
 
-That's it — there's no sign-in, no setup beyond the steps above, and
-nothing leaves your machine. The app only generates and downloads images.
+1. **Pick a template** at the top (Sunday worship, Anniversary, Christmas,
+   Good Friday, Easter, Wedding, Prayer meeting, Youth night). It fills in
+   the headline, colours and start time; change anything afterwards.
+2. **Text tab** — your organization name, the small line under it, the big
+   word and the handwritten line.
+3. **Date & time tab** — pick the date and time from a calendar and clock,
+   and choose how they're written (*1st November 2026*, *Sunday, 1 November
+   2026*, *01-11-2026* …). Switch on *Type the date and time myself* for
+   free wording such as "Every Sunday" or a Telugu date.
+4. **Badges tab** — the anniversary shield (it can count the years for you
+   from the year you started), the LIVE badge and the Subscribe bar, each
+   with editable wording. Upload a ready-made badge image to use instead of
+   the drawn shield.
+5. **Look tab** — colour palettes or your own three colours, a *Darken the
+   photo* slider for busy backgrounds, and a font for each kind of text.
+   Upload `.ttf`/`.otf` files to add fonts (marked ⭐).
+6. **Background tab** — click *Use* under any photo, upload your own (the
+   last one you add is used straight away), or press **Shuffle**.
+7. Choose **PNG** or **JPEG** and press **Download**. The app warns you if
+   the file is over YouTube's 2 MB limit. *How it looks on YouTube* shows
+   the thumbnail at phone size, and *Suggested video title* gives a title
+   you can copy.
+
+**Sidebar** — upload your logo, set your YouTube handle, and use
+**Save settings** to keep everything in a small `.json` file you can
+**Load** again next week. **Start over** resets every field.
+
+That's it — there's no sign-in, and nothing leaves your machine.
 
 ## Project files
 
+- `Start Thumbnail Generator.bat` / `start.sh` — one-click start (sets up on first run).
 - `app.py` — Streamlit UI.
+- `.streamlit/config.toml` — the app's colours and fonts.
 - `thumbnail_generator.py` — all image-compositing logic (no UI code);
   can also be run directly (`python3 thumbnail_generator.py`) to drop a
   `_preview.png` using the default config, for quick testing.

@@ -1,0 +1,13 @@
+# Look of the app (matches the SJ Tech Solutions website).
+[theme]
+primaryColor = "#3346c8"
+font = "Atkinson Hyperlegible:https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap, sans-serif"
+headingFont = "Bricolage Grotesque:https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&display=swap, sans-serif"
+baseRadius = "0.6rem"
+showWidgetBorder = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

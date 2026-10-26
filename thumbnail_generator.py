@@ -1,5 +1,5 @@
 """
-tgen_v4.py  (a.k.a. thumbnail_generator.py)
+thumbnail_generator.py
 -----------------------------------------
 Core Pillow-based compositing engine that builds a single 1280x720 YouTube
 livestream thumbnail. Fully generic -- usable for any channel, organization,
@@ -47,6 +47,36 @@ WHITE = (255, 255, 255)
 CREAM = (255, 250, 240)
 RED = (209, 33, 39)
 DARK = (10, 12, 20)
+
+RGB = Tuple[int, int, int]
+
+
+def hex_to_rgb(value: Optional[str], default: RGB) -> RGB:
+    """'#f4c442' -> (244, 196, 66). Anything unparseable falls back to `default`."""
+    try:
+        v = (value or "").strip().lstrip("#")
+        if len(v) == 3:
+            v = "".join(c * 2 for c in v)
+        return tuple(int(v[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+    except (ValueError, TypeError):
+        return default
+
+
+def rgb_to_hex(rgb: RGB) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*rgb)
+
+
+def _shade(rgb: RGB, factor: float) -> RGB:
+    """Darken (factor < 1) a colour, e.g. for outlines and ribbon folds."""
+    return tuple(max(0, min(255, int(c * factor))) for c in rgb)  # type: ignore[return-value]
+
+
+@dataclass
+class Palette:
+    """The three theme colours every element is drawn with."""
+    primary: RGB = NAVY      # outlines, badge body
+    accent: RGB = GOLD       # script lines, time text, badge number
+    highlight: RGB = RED     # LIVE dot, ribbon, Subscribe button
 
 
 # --------------------------------------------------------------------------
@@ -194,12 +224,15 @@ def soft_shadow(size: Tuple[int, int], radius: int, blur: int = 12, alpha: int =
 # Sub-components
 # --------------------------------------------------------------------------
 
-def draw_top_bottom_gradient(canvas: Image.Image):
-    """Subtle dark gradient bands top + bottom so text sits cleanly on ANY photo."""
+def draw_top_bottom_gradient(canvas: Image.Image, dim: int = 0):
+    """Subtle dark gradient bands top + bottom so text sits cleanly on ANY photo.
+    `dim` (0-70) additionally darkens the whole photo evenly, for busy or
+    very bright backgrounds."""
     w, h = canvas.size
     overlay = Image.new("L", (1, h), 0)
     px = overlay.load()
     top_h, bottom_h = 240, 260
+    base = int(255 * max(0, min(70, dim)) / 100)
     for y in range(h):
         if y < top_h:
             a = int(150 * (1 - y / top_h))
@@ -207,7 +240,7 @@ def draw_top_bottom_gradient(canvas: Image.Image):
             a = int(185 * (1 - (h - y) / bottom_h))
         else:
             a = 0
-        px[0, y] = a
+        px[0, y] = min(255, a + base - a * base // 255)
     overlay = overlay.resize((w, h))
     black = Image.new("RGBA", (w, h), (0, 0, 0, 255))
     black.putalpha(overlay)
@@ -232,23 +265,25 @@ def paste_logo(canvas: Image.Image, logo_path: Optional[str], center=(96, 96), r
 
 
 def draw_title_block(canvas: Image.Image, draw, title: str, presented_by: str,
-                      avoid_left: int, avoid_right: int, font_title: str, font_script: str):
+                      avoid_left: int, avoid_right: int, font_title: str, font_script: str,
+                      pal: Palette = Palette()):
     max_w = CANVAS_W - avoid_left - avoid_right
     font = fit_font(title.upper(), font_title, max_w, max_size=50, min_size=24)
     w = draw.textlength(title.upper(), font=font)
     x = (CANVAS_W - w) / 2
-    draw_text_outlined(draw, (x, 22), title.upper(), font, WHITE, NAVY, 4, shadow=True)
+    draw_text_outlined(draw, (x, 22), title.upper(), font, WHITE, pal.primary, 4, shadow=True)
 
     if presented_by:
         bbox = draw.textbbox((0, 0), title.upper(), font=font)
         title_bottom = 22 + (bbox[3] - bbox[1]) + 6
         pfont = _font(font_script, 30)
         pw = draw.textlength(presented_by, font=pfont)
-        draw_text_outlined(draw, ((CANVAS_W - pw) / 2, title_bottom), presented_by, pfont, GOLD, NAVY, 2, shadow=False)
+        draw_text_outlined(draw, ((CANVAS_W - pw) / 2, title_bottom), presented_by, pfont, pal.accent, pal.primary, 2, shadow=False)
 
 
 def draw_shield_badge(canvas: Image.Image, draw, box, start_year: str, end_year: str, number: str, caption: str,
-                       font_body: str, font_hero: str, font_script: str):
+                       font_body: str, font_hero: str, font_script: str,
+                       pal: Palette = Palette(), ribbon_text: str = "ANNIVERSARY"):
     """Procedurally draw a gold/navy shield anniversary badge into `box`."""
     x0, y0, x1, y1 = box
     w, h = x1 - x0, y1 - y0
@@ -263,23 +298,23 @@ def draw_shield_badge(canvas: Image.Image, draw, box, start_year: str, end_year:
     shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(6))
     canvas.alpha_composite(shadow_layer)
 
-    draw.polygon(outer, fill=GOLD, outline=(120, 84, 10))
+    draw.polygon(outer, fill=pal.accent, outline=_shade(pal.accent, 0.5))
     inset = 7
     inner = [
         (x0 + inset, y0 + h * 0.12 + inset * 0.6), (x0 + w * 0.5, y0 + inset),
         (x1 - inset, y0 + h * 0.12 + inset * 0.6), (x1 - inset, y0 + h * 0.5),
         (x0 + w * 0.5, point_y + 6), (x0 + inset, y0 + h * 0.5),
     ]
-    draw.polygon(inner, fill=NAVY)
+    draw.polygon(inner, fill=pal.primary)
 
     yr_font = _font(font_body, 14)
-    yrs_text = f"{start_year}  •  {end_year}"
+    yrs_text = f"{start_year}  •  {end_year}" if (start_year and end_year) else (start_year or end_year or "")
     yw = draw.textlength(yrs_text, font=yr_font)
-    draw.text((x0 + w / 2 - yw / 2, y0 + h * 0.16), yrs_text, font=yr_font, fill=GOLD)
+    draw.text((x0 + w / 2 - yw / 2, y0 + h * 0.16), yrs_text, font=yr_font, fill=pal.accent)
 
     num_font = fit_font(number, font_hero, w * 0.62, max_size=58, min_size=24)
     nw = draw.textlength(number, font=num_font)
-    draw.text((x0 + w / 2 - nw / 2, y0 + h * 0.27), number, font=num_font, fill=GOLD)
+    draw.text((x0 + w / 2 - nw / 2, y0 + h * 0.27), number, font=num_font, fill=pal.accent)
 
     cap_font = _font(font_script, 17)
     cw = draw.textlength(caption, font=cap_font)
@@ -289,12 +324,12 @@ def draw_shield_badge(canvas: Image.Image, draw, box, start_year: str, end_year:
     band_y0, band_y1 = y0 + h * 0.68, y0 + h * 0.80
     draw.polygon(
         [(x0 - 6, band_y0 + 4), (x1 + 6, band_y0 + 4), (x1 + 6, band_y1 + 4), (x0 - 6, band_y1 + 4)],
-        fill=(150, 20, 26),
+        fill=_shade(pal.highlight, 0.72),
     )
-    draw.polygon([(x0 - 6, band_y0 + 4), (x0 + 12, (band_y0 + band_y1) / 2 + 4), (x0 - 6, band_y1 + 4)], fill=(95, 10, 14))
-    draw.polygon([(x1 + 6, band_y0 + 4), (x1 - 12, (band_y0 + band_y1) / 2 + 4), (x1 + 6, band_y1 + 4)], fill=(95, 10, 14))
-    ann_font = _font(font_body, 13)
-    ann_text = "ANNIVERSARY"
+    draw.polygon([(x0 - 6, band_y0 + 4), (x0 + 12, (band_y0 + band_y1) / 2 + 4), (x0 - 6, band_y1 + 4)], fill=_shade(pal.highlight, 0.45))
+    draw.polygon([(x1 + 6, band_y0 + 4), (x1 - 12, (band_y0 + band_y1) / 2 + 4), (x1 + 6, band_y1 + 4)], fill=_shade(pal.highlight, 0.45))
+    ann_text = (ribbon_text or "").upper()
+    ann_font = fit_font(ann_text, font_body, w + 4, max_size=13, min_size=9)
     aw = draw.textlength(ann_text, font=ann_font)
     draw.text((x0 + w / 2 - aw / 2, band_y0 + 6), ann_text, font=ann_font, fill=WHITE)
 
@@ -323,7 +358,9 @@ def paste_anniversary_image(canvas: Image.Image, badge_path: str, box):
 
 
 def draw_date_time_panel(canvas: Image.Image, draw, date_text: str, time_text: str, right_x: int, top_y: int,
-                          font_body: str):
+                          font_body: str, pal: Palette = Palette()):
+    if not date_text and not time_text:
+        return
     f1 = fit_font(date_text, font_body, 360, max_size=34, min_size=18)
     f2 = fit_font(time_text, font_body, 360, max_size=30, min_size=16)
 
@@ -339,12 +376,13 @@ def draw_date_time_panel(canvas: Image.Image, draw, date_text: str, time_text: s
     panel = rounded_panel((panel_w, panel_h), 16, (8, 10, 18, 150))
     canvas.alpha_composite(panel, (panel_x0, top_y))
 
-    draw_text_outlined(draw, (right_x - pad_x - w1, top_y + pad_y - b1[1]), date_text, f1, WHITE, NAVY, 2, anchor=None, shadow=False)
-    draw_text_outlined(draw, (right_x - pad_x - w2, top_y + pad_y + h1 + gap - b2[1]), time_text, f2, GOLD, NAVY, 2, anchor=None, shadow=False)
+    draw_text_outlined(draw, (right_x - pad_x - w1, top_y + pad_y - b1[1]), date_text, f1, WHITE, pal.primary, 2, anchor=None, shadow=False)
+    draw_text_outlined(draw, (right_x - pad_x - w2, top_y + pad_y + h1 + gap - b2[1]), time_text, f2, pal.accent, pal.primary, 2, anchor=None, shadow=False)
 
 
 def draw_hero_text(canvas: Image.Image, draw, hero_line: str, script_line: str, left_x: int, baseline_y: int,
-                    max_w: int, font_hero: str, font_script: str, bottom_limit: int = CANVAS_H - 20):
+                    max_w: int, font_hero: str, font_script: str, bottom_limit: int = CANVAS_H - 20,
+                    pal: Palette = Palette()):
     if hero_line:
         hf = fit_font(hero_line.upper(), font_hero, max_w, max_size=150, min_size=48)
         draw_text_outlined(draw, (left_x, baseline_y), hero_line.upper(), hf, WHITE, (0, 0, 0), 9)
@@ -360,19 +398,20 @@ def draw_hero_text(canvas: Image.Image, draw, hero_line: str, script_line: str, 
         sy = hero_bottom - 16
         max_h = max(40, bottom_limit - sy)
         sf = fit_font_box(script_line, font_script, max_w * 0.85, max_h, max_size=120, min_size=36)
-        draw_text_outlined(draw, (sx, sy), script_line, sf, GOLD, (40, 24, 4), 4)
+        draw_text_outlined(draw, (sx, sy), script_line, sf, pal.accent, _shade(pal.accent, 0.18), 4)
 
 
-def draw_live_badge(canvas: Image.Image, draw, pos, font_body: str):
+def draw_live_badge(canvas: Image.Image, draw, pos, font_body: str, pal: Palette = Palette(), label: str = "LIVE"):
     x, y = pos
-    w, h = 104, 38
+    label = (label or "LIVE").upper()
+    font = _font(font_body, 20)
+    w, h = max(104, int(draw.textlength(label, font=font)) + 56), 38
     panel = rounded_panel((w, h), h // 2, (10, 10, 12, 210))
     canvas.alpha_composite(panel, (x, y))
     dot_r = 7
     cx, cy = x + 20, y + h // 2
-    draw.ellipse([cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r], fill=RED)
-    font = _font(font_body, 20)
-    draw.text((x + 36, y + h / 2), "LIVE", font=font, fill=WHITE, anchor="lm")
+    draw.ellipse([cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r], fill=pal.highlight)
+    draw.text((x + 36, y + h / 2), label, font=font, fill=WHITE, anchor="lm")
 
 
 def _youtube_icon(size=(46, 32)) -> Image.Image:
@@ -385,7 +424,8 @@ def _youtube_icon(size=(46, 32)) -> Image.Image:
     return icon
 
 
-def draw_subscribe_bar(canvas: Image.Image, draw, handle: str, box, font_body: str):
+def draw_subscribe_bar(canvas: Image.Image, draw, handle: str, box, font_body: str,
+                       pal: Palette = Palette(), label: str = "SUBSCRIBE"):
     x0, y0, x1, y1 = box
     w, h = x1 - x0, y1 - y0
     panel = rounded_panel((w, h), h // 2, (8, 10, 16, 195))
@@ -399,13 +439,14 @@ def draw_subscribe_bar(canvas: Image.Image, draw, handle: str, box, font_body: s
     htext_x = icon_x + icon.width + 14
     draw.text((htext_x, y0 + h / 2), handle, font=handle_font, fill=WHITE, anchor="lm")
 
-    btn_w, btn_h = 132, int(h * 0.62)
+    label = (label or "SUBSCRIBE").upper()
+    bfont = _font(font_body, 18)
+    btn_w, btn_h = max(132, int(draw.textlength(label, font=bfont)) + 40), int(h * 0.62)
     btn_x0 = x1 - 18 - btn_w
     btn_y0 = y0 + (h - btn_h) // 2
-    btn = rounded_panel((btn_w, btn_h), btn_h // 2, RED + (255,))
+    btn = rounded_panel((btn_w, btn_h), btn_h // 2, tuple(pal.highlight) + (255,))
     canvas.alpha_composite(btn, (btn_x0, btn_y0))
-    bfont = _font(font_body, 18)
-    draw.text((btn_x0 + btn_w / 2, btn_y0 + btn_h / 2), "SUBSCRIBE", font=bfont, fill=WHITE, anchor="mm")
+    draw.text((btn_x0 + btn_w / 2, btn_y0 + btn_h / 2), label, font=bfont, fill=WHITE, anchor="mm")
 
 
 # --------------------------------------------------------------------------
@@ -447,12 +488,34 @@ class ThumbnailConfig:
     font_script: str = FONT_SCRIPT    # cursive lines (Presents / occasion / caption)
     font_body: str = FONT_BODY        # date/time, LIVE badge, subscribe bar, badge year/ribbon
 
+    # Theme colours as hex strings (what a colour picker returns).
+    primary_color: str = rgb_to_hex(NAVY)     # outlines + badge body
+    accent_color: str = rgb_to_hex(GOLD)      # script lines, time, badge number
+    highlight_color: str = rgb_to_hex(RED)    # LIVE dot, ribbon, Subscribe button
+
+    # Extra darkening of the whole photo (0-70 %) for busy/bright backgrounds.
+    background_dim: int = 0
+
+    # Editable small labels (handy for other languages, e.g. Telugu fonts).
+    show_logo: bool = True
+    live_label: str = "LIVE"
+    subscribe_label: str = "SUBSCRIBE"
+    ribbon_text: str = "ANNIVERSARY"
+
+    def palette(self) -> Palette:
+        return Palette(
+            primary=hex_to_rgb(self.primary_color, NAVY),
+            accent=hex_to_rgb(self.accent_color, GOLD),
+            highlight=hex_to_rgb(self.highlight_color, RED),
+        )
+
 
 def generate_thumbnail(cfg: ThumbnailConfig) -> Image.Image:
     font_title = _resolve_font(cfg.font_title, FONT_TITLE)
     font_hero = _resolve_font(cfg.font_hero, FONT_HERO)
     font_script = _resolve_font(cfg.font_script, FONT_SCRIPT)
     font_body = _resolve_font(cfg.font_body, FONT_BODY)
+    pal = cfg.palette()
 
     bg_path = cfg.background_path or pick_random_background()
     if bg_path and os.path.isfile(bg_path):
@@ -462,15 +525,16 @@ def generate_thumbnail(cfg: ThumbnailConfig) -> Image.Image:
     else:
         canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), (60, 40, 70, 255))
 
-    draw_top_bottom_gradient(canvas)
+    draw_top_bottom_gradient(canvas, dim=cfg.background_dim)
     draw = ImageDraw.Draw(canvas)
 
     badge_box = (CANVAS_W - 178, 24, CANVAS_W - 24, 224)
     avoid_right = (CANVAS_W - badge_box[0] + 16) if cfg.show_anniversary else 40
-    avoid_left = 210
+    avoid_left = 210 if cfg.show_logo else 40
 
-    paste_logo(canvas, cfg.logo_path)
-    draw_title_block(canvas, draw, cfg.title, cfg.presented_by, avoid_left, avoid_right, font_title, font_script)
+    if cfg.show_logo:
+        paste_logo(canvas, cfg.logo_path)
+    draw_title_block(canvas, draw, cfg.title, cfg.presented_by, avoid_left, avoid_right, font_title, font_script, pal)
 
     if cfg.show_anniversary:
         if cfg.anniversary_badge_path and os.path.isfile(cfg.anniversary_badge_path):
@@ -481,22 +545,24 @@ def generate_thumbnail(cfg: ThumbnailConfig) -> Image.Image:
                 cfg.anniversary_start_year, cfg.anniversary_end_year,
                 cfg.anniversary_number, cfg.anniversary_caption,
                 font_body, font_hero, font_script,
+                pal=pal, ribbon_text=cfg.ribbon_text,
             )
 
     date_top = badge_box[3] + 18 if cfg.show_anniversary else 110
     draw_date_time_panel(canvas, draw, cfg.date_text, cfg.time_text, right_x=CANVAS_W - 40, top_y=date_top,
-                          font_body=font_body)
+                          font_body=font_body, pal=pal)
 
     subscribe_box = (40, CANVAS_H - 84, CANVAS_W - 40, CANVAS_H - 20)
     hero_bottom_limit = (subscribe_box[1] - 14) if cfg.show_subscribe_bar else (CANVAS_H - 20)
     draw_hero_text(canvas, draw, cfg.hero_line, cfg.script_line, left_x=56, baseline_y=400, max_w=860,
-                    font_hero=font_hero, font_script=font_script, bottom_limit=hero_bottom_limit)
+                    font_hero=font_hero, font_script=font_script, bottom_limit=hero_bottom_limit, pal=pal)
 
     if cfg.show_live_badge:
-        draw_live_badge(canvas, draw, (56, 178), font_body=font_body)
+        draw_live_badge(canvas, draw, (56, 178), font_body=font_body, pal=pal, label=cfg.live_label)
 
     if cfg.show_subscribe_bar:
-        draw_subscribe_bar(canvas, draw, cfg.youtube_handle, box=subscribe_box, font_body=font_body)
+        draw_subscribe_bar(canvas, draw, cfg.youtube_handle, box=subscribe_box, font_body=font_body,
+                           pal=pal, label=cfg.subscribe_label)
 
     return canvas.convert("RGB")
 
